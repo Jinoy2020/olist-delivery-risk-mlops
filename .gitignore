@@ -1,0 +1,31 @@
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Secrets and environment variables
+.env
+.env.*
+!.env.example
+
+# IDE
+.vscode/
+.idea/
+
+# Raw and processed datasets
+data/raw/*
+data/processed/*
+
+# Model artifacts
+models/*
+mlruns/
+
+# Temporary files
+*.log
+.DS_Store
