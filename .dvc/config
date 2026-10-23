@@ -1,0 +1,5 @@
+[core]
+    remote = oliststorage
+['remote "oliststorage"']
+    url = s3://olist-delivery-risk-mlops-jinoy-2026
+    profile = olist-dvc
