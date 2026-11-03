@@ -29,3 +29,6 @@ mlruns/
 # Temporary files
 *.log
 .DS_Store
+
+# MLflow local tracking database
+mlflow.db*
