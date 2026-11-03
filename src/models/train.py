@@ -5,6 +5,9 @@ import json
 import joblib
 import pandas as pd
 
+import mlflow
+import mlflow.sklearn
+
 from sklearn.compose import ColumnTransformer
 from sklearn.impute import SimpleImputer
 from sklearn.linear_model import LogisticRegression
@@ -152,6 +155,9 @@ def evaluate_model(name, model, X_val, y_val):
 
 
 def main():
+    mlflow.set_tracking_uri("file:./mlruns")
+    mlflow.set_experiment("olist-delivery-risk")
+
     print("Loading datasets...")
     train_df, val_df = load_data()
 
@@ -194,20 +200,54 @@ def main():
     for name, classifier in models.items():
         print(f"\nTraining {name}...")
 
-        pipeline = Pipeline([
-            ("preprocessor", preprocessor),
-            ("classifier", classifier),
-        ])
+        with mlflow.start_run(run_name=name):
+            pipeline = Pipeline([
+                ("preprocessor", build_preprocessor(
+                    categorical_features,
+                    numerical_features,
+                )),
+                ("classifier", classifier),
+            ])
 
-        pipeline.fit(X_train, y_train)
+            pipeline.fit(X_train, y_train)
 
-        metrics = evaluate_model(
-            name,
-            pipeline,
-            X_val,
-            y_val,
-        )
+            metrics = evaluate_model(
+                name,
+                pipeline,
+                X_val,
+                y_val,
+            )
 
+            # Log model parameters
+            mlflow.log_param("model_name", name)
+            mlflow.log_param("class_weight", "balanced")
+            mlflow.log_param("random_state", 42)
+            mlflow.log_param("numerical_features", numerical_features)
+            mlflow.log_param("categorical_features", categorical_features)
+
+            if name == "logistic_regression":
+                mlflow.log_param("max_iter", 1000)
+
+            elif name == "random_forest":
+                mlflow.log_param("n_estimators", 200)
+                mlflow.log_param("n_jobs", -1)
+
+            # Log validation metrics
+            mlflow.log_metrics({
+                "pr_auc": metrics["pr_auc"],
+                "roc_auc": metrics["roc_auc"],
+                "precision": metrics["precision"],
+                "recall": metrics["recall"],
+                "f1": metrics["f1"],
+            })
+
+            # Log trained pipeline
+            mlflow.sklearn.log_model(
+                pipeline,
+                name=f"{name}_model",
+            )
+
+        print(f"Validation metrics: {metrics}")
         results.append(metrics)
         trained_models[name] = pipeline
 
