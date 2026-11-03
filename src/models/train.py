@@ -155,7 +155,7 @@ def evaluate_model(name, model, X_val, y_val):
 
 
 def main():
-    mlflow.set_tracking_uri("file:./mlruns")
+    mlflow.set_tracking_uri("sqlite:///mlflow.db")
     mlflow.set_experiment("olist-delivery-risk")
 
     print("Loading datasets...")
@@ -241,10 +241,15 @@ def main():
                 "f1": metrics["f1"],
             })
 
-            # Log trained pipeline
+        
+                        # Log trained pipeline
             mlflow.sklearn.log_model(
                 pipeline,
                 name=f"{name}_model",
+                skops_trusted_types=[
+                    "numpy.dtype",
+                    "sklearn.tree._tree.Tree",
+                ],
             )
 
         print(f"Validation metrics: {metrics}")
