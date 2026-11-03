@@ -63,7 +63,11 @@ def build_features() -> pd.DataFrame:
     actual_delivery = pd.to_datetime(
         orders["order_delivered_customer_date"], errors="coerce"
     )
-
+        # Estimated delivery lead time, available at checkout (subject to validation).
+    orders["estimated_lead_days"] = (
+        orders["order_estimated_delivery_date"]
+        - orders["order_purchase_timestamp"]
+    ).dt.total_seconds() / 86400
     # Historical labels require a known outcome and a valid purchase time.
     valid = (
         orders["order_status"].eq("delivered")
@@ -120,6 +124,7 @@ def build_features() -> pd.DataFrame:
             "purchase_month",
             "purchase_day_of_week",
             "purchase_hour",
+            "estimated_lead_days",
             "is_delayed",
         ]
     ].merge(
