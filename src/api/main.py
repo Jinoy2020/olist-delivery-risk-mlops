@@ -1,13 +1,14 @@
 
 import os
-
+import sqlite3
+from fastapi import Query
 import mlflow
 import mlflow.sklearn
 import pandas as pd
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
-
+from src.monitoring.prediction_logger import DB_PATH, log_prediction
 
 MODEL_NAME = "olist-delivery-risk-classifier"
 MODEL_VERSION = "1"
@@ -58,10 +59,49 @@ def health():
         "status": "healthy",
         "model_loaded": model is not None,
     }
+@app.get("/monitoring/predictions")
+def get_monitoring_predictions(limit: int = Query(default=100, ge=1, le=1000)):
+    try:
+        with sqlite3.connect(DB_PATH) as connection:
+            connection.row_factory = sqlite3.Row
 
+            rows = connection.execute(
+                """
+                SELECT timestamp, input_features, prediction,
+                       delay_probability, model_name, model_version
+                FROM predictions
+                ORDER BY timestamp DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+
+        return {
+            "total_returned": len(rows),
+            "predictions": [
+                {
+                    "timestamp": row["timestamp"],
+                    "input_features": __import__("json").loads(
+                        row["input_features"]
+                    ),
+                    "prediction": row["prediction"],
+                    "delay_probability": row["delay_probability"],
+                    "model_name": row["model_name"],
+                    "model_version": row["model_version"],
+                }
+                for row in rows
+            ],
+        }
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to retrieve monitoring predictions.",
+        ) from exc
 
 @app.post("/predict")
 def predict(order: OrderFeatures):
+    
     try:
         input_data = pd.DataFrame([order.model_dump()])
 
@@ -69,6 +109,14 @@ def predict(order: OrderFeatures):
         probabilities = model.predict_proba(input_data)[0]
 
         delay_probability = float(probabilities[1])
+
+        log_prediction(
+            input_features=order.model_dump(),
+            prediction=prediction,
+            delay_probability=delay_probability,
+            model_name=MODEL_NAME,
+            model_version=MODEL_VERSION,
+        )
 
         return {
             "is_delayed": prediction,
