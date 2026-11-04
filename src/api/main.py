@@ -1,4 +1,6 @@
 
+import os
+
 import mlflow
 import mlflow.sklearn
 import pandas as pd
@@ -7,16 +9,21 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
 
-# MLflow configuration
-mlflow.set_tracking_uri("sqlite:///mlflow.db")
-
 MODEL_NAME = "olist-delivery-risk-classifier"
 MODEL_VERSION = "1"
 
-# Load the registered model once when the API starts
-model = mlflow.sklearn.load_model(
-    f"models:/{MODEL_NAME}/{MODEL_VERSION}"
-)
+# Load the model from a local artifact directory in Docker.
+# Otherwise, load the registered model from local MLflow.
+MODEL_PATH = os.getenv("MODEL_PATH")
+
+if MODEL_PATH:
+    model = mlflow.sklearn.load_model(MODEL_PATH)
+else:
+    mlflow.set_tracking_uri("sqlite:///mlflow.db")
+    model = mlflow.sklearn.load_model(
+        f"models:/{MODEL_NAME}/{MODEL_VERSION}"
+    )
+
 
 app = FastAPI(
     title="Olist Delivery Risk API",
@@ -25,7 +32,6 @@ app = FastAPI(
 )
 
 
-# Input schema: must match the training features
 class OrderFeatures(BaseModel):
     purchase_month: int = Field(ge=1, le=12)
     purchase_day_of_week: int = Field(ge=0, le=6)
