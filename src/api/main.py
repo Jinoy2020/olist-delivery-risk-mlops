@@ -12,7 +12,10 @@ from pydantic import BaseModel, Field
 from src.monitoring.prediction_logger import DB_PATH, log_prediction
 from threading import Lock
 from fastapi import Request
-from src.monitoring.performance_logger import log_request_metric
+from src.monitoring.performance_logger import (
+    log_request_metric,
+    log_performance_alert,
+)
 
 MODEL_NAME = "olist-delivery-risk-classifier"
 MODEL_VERSION = "1"
@@ -75,6 +78,13 @@ async def monitor_requests(request: Request, call_next):
             500,
             response_time_ms
         )
+        log_performance_alert(
+            "HTTP_ERROR",
+            "Unhandled API exception detected",
+            request.url.path,
+            response_time_ms,
+            500
+        )
 
         raise
 
@@ -107,6 +117,23 @@ async def monitor_requests(request: Request, call_next):
         response.status_code,
         response_time_ms
     )
+    if response.status_code >= 400:
+        log_performance_alert(
+            "HTTP_ERROR",
+            f"HTTP {response.status_code} error detected",
+            request.url.path,
+            response_time_ms,
+            response.status_code
+        )
+
+    if response_time_ms > 500:
+        log_performance_alert(
+            "HIGH_LATENCY",
+            "API response time exceeded 500 ms",
+            request.url.path,
+            response_time_ms,
+            response.status_code
+        )
 
     response.headers["X-Response-Time-MS"] = str(
         round(response_time_ms, 2)
@@ -192,6 +219,82 @@ def get_monitoring_metrics():
                 request_metrics["max_response_time_ms"], 2
             ),
         }
+
+@app.get("/monitoring/metrics/history")
+def get_metrics_history(limit: int = Query(default=500, ge=1, le=5000)):
+    try:
+        with sqlite3.connect(DB_PATH, timeout=5) as connection:
+            connection.row_factory = sqlite3.Row
+
+            rows = connection.execute(
+                """
+                SELECT timestamp, method, path, status_code, response_time_ms
+                FROM api_request_metrics
+                ORDER BY id DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+
+        return {
+            "total_returned": len(rows),
+            "metrics": [
+                {
+                    "timestamp": row["timestamp"],
+                    "method": row["method"],
+                    "path": row["path"],
+                    "status_code": row["status_code"],
+                    "response_time_ms": row["response_time_ms"],
+                }
+                for row in reversed(rows)
+            ],
+        }
+
+    except sqlite3.Error as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to retrieve API performance history.",
+        ) from exc
+@app.get("/monitoring/alerts")
+def get_performance_alerts(
+    limit: int = Query(default=100, ge=1, le=1000)
+):
+    try:
+        with sqlite3.connect(DB_PATH, timeout=5) as connection:
+            connection.row_factory = sqlite3.Row
+
+            rows = connection.execute(
+                """
+                SELECT id, timestamp, alert_type, message,
+                       endpoint, response_time_ms, status_code
+                FROM api_performance_alerts
+                ORDER BY id DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+
+        return {
+            "total_returned": len(rows),
+            "alerts": [
+                {
+                    "id": row["id"],
+                    "timestamp": row["timestamp"],
+                    "alert_type": row["alert_type"],
+                    "message": row["message"],
+                    "endpoint": row["endpoint"],
+                    "response_time_ms": row["response_time_ms"],
+                    "status_code": row["status_code"],
+                }
+                for row in rows
+            ],
+        }
+
+    except sqlite3.Error as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to retrieve API performance alerts.",
+        ) from exc
 
 @app.get("/monitoring/predictions")
 def get_monitoring_predictions(limit: int = Query(default=100, ge=1, le=1000)):

@@ -32,3 +32,9 @@ mlruns/
 
 # MLflow local tracking database
 mlflow.db*
+# Local monitoring databases
+monitoring.db*
+monitoring_volume.db*
+
+# Generated monitoring reports and logs
+reports/

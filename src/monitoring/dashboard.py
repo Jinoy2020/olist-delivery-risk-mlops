@@ -15,6 +15,7 @@ METRICS_API_URL = "http://localhost:8000/monitoring/metrics"
 DRIFT_REPORT_PATH = PROJECT_ROOT / "reports" / "data_drift_report.html"
 DRIFT_ALERT_PATH = PROJECT_ROOT / "reports" / "drift_alerts.json"
 TEST_EVALUATION_PATH = PROJECT_ROOT / "reports" / "test_evaluation.json"
+ALERTS_API_URL = "http://localhost:8000/monitoring/alerts?limit=100"
 
 st.set_page_config(
     page_title="Olist ML Monitoring",
@@ -51,6 +52,24 @@ def load_api_metrics():
     response = requests.get(METRICS_API_URL, timeout=15)
     response.raise_for_status()
     return response.json()
+@st.cache_data(ttl=10)
+def load_metrics_history():
+    response = requests.get(
+        "http://localhost:8000/monitoring/metrics/history?limit=500",
+        timeout=15
+    )
+    response.raise_for_status()
+
+    records = response.json()["metrics"]
+    return pd.DataFrame(records)
+
+
+@st.cache_data(ttl=10)
+def load_performance_alerts():
+    response = requests.get(ALERTS_API_URL, timeout=15)
+    response.raise_for_status()
+    return response.json()
+
 
 if df.empty:
     st.warning("No prediction records available yet.")
@@ -121,6 +140,192 @@ except requests.RequestException as exc:
 st.caption(
     "API metrics are process-local counters and reset when the API restarts."
 )
+# Persistent API Performance Alerts
+st.subheader("API Performance Alerts")
+
+try:
+    alert_data = load_performance_alerts()
+    alerts = alert_data.get("alerts", [])
+
+    alerts_df = pd.DataFrame(alerts)
+
+    if not alerts_df.empty:
+        total_alerts = len(alerts_df)
+
+        http_errors = int(
+            (alerts_df["alert_type"] == "HTTP_ERROR").sum()
+        )
+
+        high_latency = int(
+            (alerts_df["alert_type"] == "HIGH_LATENCY").sum()
+        )
+
+        col1, col2, col3 = st.columns(3)
+
+        col1.metric("Total Alerts", total_alerts)
+        col2.metric("HTTP Errors", http_errors)
+        col3.metric("High Latency Alerts", high_latency)
+
+        st.markdown("**Recent Alert History**")
+
+        alerts_df["timestamp"] = pd.to_datetime(
+            alerts_df["timestamp"],
+            errors="coerce",
+            utc=True
+        )
+
+        alerts_df = alerts_df.sort_values(
+            "timestamp",
+            ascending=False
+        )
+
+        display_alerts = alerts_df[
+            [
+                "timestamp",
+                "alert_type",
+                "message",
+                "endpoint",
+                "response_time_ms",
+                "status_code",
+            ]
+        ].copy()
+
+        display_alerts["response_time_ms"] = (
+            display_alerts["response_time_ms"].round(2)
+        )
+
+        display_alerts = display_alerts.rename(columns={
+            "timestamp": "Time",
+            "alert_type": "Alert Type",
+            "message": "Message",
+            "endpoint": "Endpoint",
+            "response_time_ms": "Response (ms)",
+            "status_code": "HTTP Status",
+        })
+
+        st.dataframe(
+            display_alerts,
+            width="stretch",
+            hide_index=True,
+        )
+
+    else:
+        st.success("No API performance alerts recorded.")
+
+except requests.RequestException as exc:
+    st.warning(f"Unable to load API performance alerts: {exc}")
+
+# Historical API Performance
+st.subheader("Historical API Performance")
+
+try:
+    history_df = load_metrics_history()
+
+    if history_df.empty:
+        st.info("No historical API performance records available yet.")
+    else:
+        history_df["timestamp"] = pd.to_datetime(
+            history_df["timestamp"],
+            errors="coerce",
+            utc=True
+        )
+
+        history_df = history_df.dropna(subset=["timestamp"])
+        history_df = history_df.sort_values("timestamp")
+
+        # Request volume over time
+        st.markdown("**Request Volume Over Time**")
+
+        requests_over_time = (
+            history_df.set_index("timestamp")
+            .resample("1min")
+            .size()
+        )
+
+        st.line_chart(
+            requests_over_time,
+            y_label="Number of requests"
+        )
+
+        # Response time over time
+        st.markdown("**Response Time Over Time**")
+
+        latency_over_time = history_df.set_index("timestamp")[
+            ["response_time_ms"]
+        ]
+
+        st.line_chart(
+            latency_over_time,
+            y_label="Response time (ms)"
+        )
+
+        # Endpoint-wise performance
+        st.markdown("**Endpoint-wise Performance**")
+
+        endpoint_summary = (
+            history_df.groupby("path")
+            .agg(
+                request_count=("path", "count"),
+                average_response_time_ms=("response_time_ms", "mean"),
+                max_response_time_ms=("response_time_ms", "max"),
+                error_count=("status_code", lambda values: (values >= 400).sum())
+            )
+            .round(2)
+            .sort_values("average_response_time_ms", ascending=False)
+        )
+
+        st.dataframe(endpoint_summary, width="stretch")
+                # API Latency Alerts
+        st.markdown("**API Latency Alerts**")
+
+        LATENCY_THRESHOLD_MS = 500
+
+        slow_endpoints = endpoint_summary[
+            endpoint_summary["average_response_time_ms"]
+            > LATENCY_THRESHOLD_MS
+        ]
+
+        if not slow_endpoints.empty:
+            st.warning(
+                f"{len(slow_endpoints)} endpoint(s) exceeded "
+                f"the {LATENCY_THRESHOLD_MS} ms average latency threshold."
+            )
+            st.dataframe(slow_endpoints, width="stretch")
+        else:
+            st.success(
+                f"All endpoints are below the "
+                f"{LATENCY_THRESHOLD_MS} ms average latency threshold."
+            )
+                # HTTP Status Code Distribution
+        st.markdown("**HTTP Status Code Distribution**")
+
+        status_distribution = (
+            history_df["status_code"]
+            .value_counts()
+            .sort_index()
+            .rename_axis("HTTP Status")
+            .to_frame("Request Count")
+        )
+
+        st.bar_chart(status_distribution)
+
+        error_count = int(
+            (history_df["status_code"] >= 400).sum()
+        )
+
+        if error_count > 0:
+            st.warning(
+                f"{error_count} failed HTTP requests detected."
+            )
+        else:
+            st.success(
+                "No failed HTTP requests in the recorded history."
+            )
+
+
+
+except requests.RequestException as exc:
+    st.warning(f"Unable to load historical API metrics: {exc}")
 
 st.divider()
 

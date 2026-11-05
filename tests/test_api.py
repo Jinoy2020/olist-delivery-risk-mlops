@@ -5,6 +5,9 @@ from src.api.main import app
 from fastapi import Request
 from collections import defaultdict
 from threading import Lock
+import sqlite3
+
+import src.monitoring.performance_logger as performance_logger
 
 client = TestClient(app)
 
@@ -81,3 +84,59 @@ def test_monitoring_metrics():
 
     assert result["total_requests"] >= 1
     assert result["successful_requests"] >= 1
+def test_monitoring_metrics_history():
+    response = client.get("/monitoring/metrics/history")
+
+    assert response.status_code == 200
+
+    result = response.json()
+
+    assert "total_returned" in result
+    assert "metrics" in result
+    assert isinstance(result["metrics"], list)
+
+    if result["metrics"]:
+        record = result["metrics"][0]
+
+        assert "timestamp" in record
+        assert "method" in record
+        assert "path" in record
+        assert "status_code" in record
+        assert "response_time_ms" in record
+def test_performance_alert_persistence(tmp_path, monkeypatch):
+    test_db = tmp_path / "test_monitoring.db"
+
+    monkeypatch.setattr(performance_logger, "DB_PATH", test_db)
+
+    performance_logger.log_performance_alert(
+        alert_type="HIGH_LATENCY",
+        message="API response time exceeded 500 ms",
+        endpoint="/predict",
+        response_time_ms=650.0,
+        status_code=200,
+    )
+
+    with sqlite3.connect(test_db) as connection:
+        record = connection.execute(
+            """
+            SELECT alert_type, message, endpoint, response_time_ms, status_code
+            FROM api_performance_alerts
+            """
+        ).fetchone()
+
+    assert record is not None
+    assert record[0] == "HIGH_LATENCY"
+    assert record[1] == "API response time exceeded 500 ms"
+    assert record[2] == "/predict"
+    assert record[3] == 650.0
+    assert record[4] == 200
+def test_monitoring_alerts():
+    response = client.get("/monitoring/alerts")
+
+    assert response.status_code == 200
+
+    result = response.json()
+
+    assert "total_returned" in result
+    assert "alerts" in result
+    assert isinstance(result["alerts"], list)
