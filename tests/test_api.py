@@ -2,6 +2,9 @@
 from fastapi.testclient import TestClient
 
 from src.api.main import app
+from fastapi import Request
+from collections import defaultdict
+from threading import Lock
 
 client = TestClient(app)
 
@@ -61,3 +64,20 @@ def test_predict_invalid_input():
     response = client.post("/predict", json=payload)
 
     assert response.status_code == 422
+def test_monitoring_metrics():
+    response = client.get("/monitoring/metrics")
+
+    assert response.status_code == 200
+
+    result = response.json()
+
+    assert "total_requests" in result
+    assert "successful_requests" in result
+    assert "error_requests" in result
+    assert "error_rate" in result
+    assert "average_response_time_ms" in result
+    assert "min_response_time_ms" in result
+    assert "max_response_time_ms" in result
+
+    assert result["total_requests"] >= 1
+    assert result["successful_requests"] >= 1

@@ -9,9 +9,12 @@ import streamlit as st
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
+
 API_URL = "http://localhost:8000/monitoring/predictions?limit=1000"
+METRICS_API_URL = "http://localhost:8000/monitoring/metrics"
 DRIFT_REPORT_PATH = PROJECT_ROOT / "reports" / "data_drift_report.html"
 DRIFT_ALERT_PATH = PROJECT_ROOT / "reports" / "drift_alerts.json"
+TEST_EVALUATION_PATH = PROJECT_ROOT / "reports" / "test_evaluation.json"
 
 st.set_page_config(
     page_title="Olist ML Monitoring",
@@ -43,6 +46,11 @@ except requests.RequestException as exc:
     st.info("Check whether the Docker API container is running.")
     st.stop()
 
+@st.cache_data(ttl=10)
+def load_api_metrics():
+    response = requests.get(METRICS_API_URL, timeout=15)
+    response.raise_for_status()
+    return response.json()
 
 if df.empty:
     st.warning("No prediction records available yet.")
@@ -60,6 +68,61 @@ delayed = int((df["prediction"] == 1).sum())
 on_time = int((df["prediction"] == 0).sum())
 avg_probability = float(df["delay_probability"].mean())
 
+# API Performance Monitoring
+st.subheader("API Performance Monitoring")
+
+try:
+    api_metrics = load_api_metrics()
+
+    col1, col2, col3, col4 = st.columns(4)
+
+    col1.metric(
+        "Total API Requests",
+        f"{api_metrics['total_requests']:,}"
+    )
+
+    col2.metric(
+        "Successful Requests",
+        f"{api_metrics['successful_requests']:,}"
+    )
+
+    col3.metric(
+        "Failed Requests",
+        f"{api_metrics['error_requests']:,}"
+    )
+
+    col4.metric(
+        "Error Rate",
+        f"{api_metrics['error_rate']:.2%}"
+    )
+
+    col5, col6, col7 = st.columns(3)
+
+    col5.metric(
+        "Average Response Time",
+        f"{api_metrics['average_response_time_ms']:.2f} ms"
+    )
+
+    col6.metric(
+        "Minimum Response Time",
+        f"{api_metrics['min_response_time_ms']:.2f} ms"
+        if api_metrics["min_response_time_ms"] is not None
+        else "N/A"
+    )
+
+    col7.metric(
+        "Maximum Response Time",
+        f"{api_metrics['max_response_time_ms']:.2f} ms"
+    )
+
+except requests.RequestException as exc:
+    st.warning(f"Unable to load API performance metrics: {exc}")
+
+st.caption(
+    "API metrics are process-local counters and reset when the API restarts."
+)
+
+st.divider()
 
 # Prediction overview
 st.subheader("Prediction Overview")
@@ -122,6 +185,65 @@ model_col2.write(
 
 st.divider()
 
+# Historical Model Performance
+st.subheader("Historical Model Performance")
+
+if TEST_EVALUATION_PATH.exists():
+
+    try:
+        evaluation = json.loads(
+            TEST_EVALUATION_PATH.read_text(encoding="utf-8")
+        )
+
+        st.info(
+            "Historical held-out test evaluation. "
+            "These metrics are not live production performance."
+        )
+
+        col1, col2, col3, col4 = st.columns(4)
+
+        col1.metric("PR-AUC", f"{evaluation['pr_auc']:.4f}")
+        col2.metric("ROC-AUC", f"{evaluation['roc_auc']:.4f}")
+        col3.metric("Precision", f"{evaluation['precision']:.2%}")
+        col4.metric("Recall", f"{evaluation['recall']:.2%}")
+
+        col5, col6, col7 = st.columns(3)
+
+        col5.metric("F1 Score", f"{evaluation['f1']:.4f}")
+        col6.metric("Test Samples", f"{evaluation['test_samples']:,}")
+        col7.metric("Threshold", evaluation["threshold"])
+
+        st.write(
+            f"**Model:** {evaluation['model_name']} "
+            f"| **Version:** {evaluation['model_version']}"
+        )
+
+        st.subheader("Test Confusion Matrix")
+
+        cm = evaluation["confusion_matrix"]
+
+        confusion_df = pd.DataFrame(
+            cm,
+            index=["Actual On Time", "Actual Delayed"],
+            columns=["Predicted On Time", "Predicted Delayed"]
+        )
+
+        st.dataframe(confusion_df, width="stretch")
+
+        with st.expander("Detailed Classification Report"):
+            report_df = pd.DataFrame(
+                evaluation["classification_report"]
+            ).T
+
+            st.dataframe(report_df, width="stretch")
+
+    except (json.JSONDecodeError, KeyError, OSError, TypeError, ValueError) as exc:
+        st.error(f"Unable to load model evaluation: {exc}")
+
+else:
+    st.warning("No historical model evaluation report found.")
+
+st.divider()
 
 # Data drift monitoring
 st.subheader("Data Drift Monitoring")
