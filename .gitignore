@@ -38,3 +38,6 @@ monitoring_volume.db*
 
 # Generated monitoring reports and logs
 reports/
+# Feast feature store
+.feast-venv/
+feature_store/data/
