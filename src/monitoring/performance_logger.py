@@ -34,6 +34,8 @@ def log_request_metric(method, path, status_code, response_time_ms):
             status_code,
             response_time_ms
         ))
+
+
 def log_performance_alert(alert_type, message, endpoint, response_time_ms, status_code):
     with sqlite3.connect(DB_PATH, timeout=5) as connection:
         connection.execute("""

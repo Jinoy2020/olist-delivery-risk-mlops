@@ -6,6 +6,7 @@ import mlflow
 import mlflow.sklearn
 import pandas as pd
 import time
+import httpx
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
@@ -19,6 +20,21 @@ from src.monitoring.performance_logger import (
 
 MODEL_NAME = "olist-delivery-risk-classifier"
 MODEL_VERSION = "1"
+FEAST_SERVER_URL = os.getenv(
+    "FEAST_SERVER_URL",
+    "http://127.0.0.1:6566"
+)
+
+FEAST_FEATURES = [
+    "olist_order_live_features:purchase_month",
+    "olist_order_live_features:purchase_day_of_week",
+    "olist_order_live_features:purchase_hour",
+    "olist_order_live_features:estimated_lead_days",
+    "olist_order_live_features:item_count",
+    "olist_order_live_features:total_price",
+    "olist_order_live_features:total_freight_value",
+    "olist_order_live_features:customer_state",
+]
 
 # Load the model from a local artifact directory in Docker.
 # Otherwise, load the registered model from local MLflow.
@@ -152,6 +168,97 @@ class OrderFeatures(BaseModel):
     total_freight_value: float = Field(ge=0)
     customer_state: str = Field(min_length=2, max_length=2)
 
+def get_features_from_feast(order_id: str) -> dict:
+    payload = {
+        "entities": {
+            "order_id": [order_id]
+        },
+        "features": FEAST_FEATURES,
+    }
+
+    try:
+        response = httpx.post(
+            f"{FEAST_SERVER_URL}/get-online-features",
+            json=payload,
+            timeout=10.0,
+        )
+        response.raise_for_status()
+
+    except httpx.RequestError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Unable to connect to Feast feature server.",
+        ) from exc
+
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail="Feast feature server returned an error.",
+        ) from exc
+
+    result = response.json()
+    feature_names = result["metadata"]["feature_names"]
+
+    features = {}
+
+    for name, item in zip(feature_names, result["results"]):
+        if name == "order_id":
+            continue
+
+        if not item["statuses"] or item["statuses"][0] != "PRESENT":
+            raise HTTPException(
+                status_code=404,
+                detail=f"Feature '{name}' is missing for order '{order_id}'.",
+            )
+
+        features[name] = item["values"][0]
+
+    return features
+
+@app.post("/predict-with-feast/{order_id}")
+def predict_with_feast(order_id: str):
+    try:
+        features = get_features_from_feast(order_id)
+
+        # Validate the retrieved features using the existing schema.
+        order = OrderFeatures(**features)
+
+        input_data = pd.DataFrame([order.model_dump()])
+
+        prediction = int(model.predict(input_data)[0])
+        probabilities = model.predict_proba(input_data)[0]
+
+        delay_probability = float(probabilities[1])
+
+        log_prediction(
+            input_features=order.model_dump(),
+            prediction=prediction,
+            delay_probability=delay_probability,
+            model_name=MODEL_NAME,
+            order_id=order_id,
+            model_version=MODEL_VERSION,
+        )
+
+        return {
+            "order_id": order_id,
+            "is_delayed": prediction,
+            "prediction": (
+                "Delayed" if prediction == 1 else "On Time"
+            ),
+            "delay_probability": round(delay_probability, 4),
+            "features_source": "Feast",
+            "model_name": MODEL_NAME,
+            "model_version": MODEL_VERSION,
+        }
+
+    except HTTPException:
+        raise
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Feast-based prediction failed: {str(exc)}",
+        ) from exc
 
 @app.get("/")
 def root():
@@ -304,8 +411,8 @@ def get_monitoring_predictions(limit: int = Query(default=100, ge=1, le=1000)):
 
             rows = connection.execute(
                 """
-                SELECT timestamp, input_features, prediction,
-                       delay_probability, model_name, model_version
+                SELECT timestamp, order_id, input_features, prediction,
+                delay_probability, model_name, model_version
                 FROM predictions
                 ORDER BY timestamp DESC
                 LIMIT ?
@@ -318,6 +425,7 @@ def get_monitoring_predictions(limit: int = Query(default=100, ge=1, le=1000)):
             "predictions": [
                 {
                     "timestamp": row["timestamp"],
+                    "order_id": row["order_id"],
                     "input_features": __import__("json").loads(
                         row["input_features"]
                     ),

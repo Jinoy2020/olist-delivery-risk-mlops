@@ -18,3 +18,4 @@ tesets/
 .env.*
 !.env.example
 *.log
+feature_store/
