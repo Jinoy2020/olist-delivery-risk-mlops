@@ -154,7 +154,9 @@ def evaluate_model(name, model, X_val, y_val):
     return metrics
 
 
-def main():
+def main(model_dir=None):
+    model_dir = Path(model_dir) if model_dir is not None else MODEL_DIR
+    model_dir.mkdir(parents=True, exist_ok=True)
     mlflow.set_tracking_uri("sqlite:///mlflow.db")
     mlflow.set_experiment("olist-delivery-risk")
 
@@ -270,8 +272,8 @@ def main():
     best_name = results_df.iloc[0]["model"]
     best_model = trained_models[best_name]
 
-    model_path = MODEL_DIR / "best_model.joblib"
-    metrics_path = MODEL_DIR / "validation_metrics.json"
+    model_path = model_dir / "best_model.joblib"
+    metrics_path = model_dir / "validation_metrics.json"
 
     joblib.dump(best_model, model_path)
 
