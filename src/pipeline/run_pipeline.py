@@ -110,9 +110,7 @@ def run_data_pipeline(
             model_output_dir = run_dir / "models"
             train.main(model_dir=model_output_dir)
 
-            model_output_dir = run_dir / "models"
-            train.main(model_dir=model_output_dir)
-
+           
             model_path = model_output_dir / "best_model.joblib"
             metrics_path = model_output_dir / "validation_metrics.json"
 
@@ -125,6 +123,21 @@ def run_data_pipeline(
                 "status": "success",
                 "model_path": str(model_path),
                 "metrics_path": str(metrics_path),
+            }
+            with open(metrics_path, "r", encoding="utf-8") as file:
+                validation_results = json.load(file)
+
+            best_model_metrics = next(
+                metric
+                for metric in validation_results["validation_metrics"]
+                if metric["model"] == validation_results["best_model"]
+            )
+
+            results["stages"]["model_evaluation"] = {
+                "status": "success",
+                "dataset": "validation",
+                "best_model": validation_results["best_model"],
+                "metrics": best_model_metrics,
             }
 
         else:

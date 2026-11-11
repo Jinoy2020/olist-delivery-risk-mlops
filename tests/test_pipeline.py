@@ -93,7 +93,24 @@ def test_training_only_uses_separate_model_directory(tmp_path, monkeypatch):
 
         model_dir.mkdir(parents=True, exist_ok=True)
         (model_dir / "best_model.joblib").touch()
-        (model_dir / "validation_metrics.json").touch()
+        (model_dir / "validation_metrics.json").write_text(
+            """
+            {
+                "best_model": "logistic_regression",
+                "validation_metrics": [
+                    {
+                        "model": "logistic_regression",
+                        "pr_auc": 0.1377,
+                        "roc_auc": 0.7502,
+                        "precision": 0.1056,
+                        "recall": 0.6765,
+                        "f1": 0.1827
+                    }
+                ]
+            }
+            """,
+            encoding="utf-8",
+        )
 
     def unexpected_call(*args, **kwargs):
         raise AssertionError("Data pipeline stage should not run.")
@@ -119,6 +136,13 @@ def test_training_only_uses_separate_model_directory(tmp_path, monkeypatch):
 
     assert result["status"] == "success"
     assert result["stages"]["model_training"]["status"] == "success"
+    evaluation = result["stages"]["model_evaluation"]
+
+    assert evaluation["status"] == "success"
+    assert evaluation["dataset"] == "validation"
+    assert evaluation["best_model"] == "logistic_regression"
+    assert evaluation["metrics"]["model"] == "logistic_regression"
+    assert abs(evaluation["metrics"]["pr_auc"] - 0.1377) < 0.0001
     assert captured["model_dir"].parent.parent == (
         tmp_path / "reports" / "pipeline_runs"
     )
