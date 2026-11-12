@@ -2,7 +2,7 @@
 from src.pipeline.run_pipeline import run_data_pipeline
 import pytest
 from unittest.mock import Mock
-
+import pandas as pd
 
 def test_dry_run_protects_existing_files(tmp_path, monkeypatch):
     """Dry-run should detect existing datasets without executing stages."""
@@ -320,3 +320,173 @@ def test_training_only_records_model_registration(tmp_path, monkeypatch):
     )
 
     assert (captured["model_dir"] / "best_model.joblib").exists()
+
+
+
+def test_model_validation_passes():
+    from src.models.train import validate_model_for_registration
+
+    result = validate_model_for_registration(
+        {
+            "pr_auc": 0.50,
+            "roc_auc": 0.75,
+        },
+        pd.Series([0, 0, 0, 0, 1, 1]),
+    )
+
+    assert result["passed"] is True
+    assert result["reasons"] == []
+
+def test_model_validation_fails_low_pr_auc():
+    from src.models.train import validate_model_for_registration
+
+    result = validate_model_for_registration(
+        {
+            "pr_auc": 0.20,
+            "roc_auc": 0.75,
+        },
+        pd.Series([0, 0, 0, 1, 1]),
+    )
+
+    assert result["passed"] is False
+    assert any(
+        "PR-AUC" in reason
+        for reason in result["reasons"]
+    )
+
+
+def test_model_validation_fails_low_roc_auc():
+    from src.models.train import validate_model_for_registration
+
+    result = validate_model_for_registration(
+        {
+            "pr_auc": 0.50,
+            "roc_auc": 0.50,
+        },
+        pd.Series([0, 0, 0, 1, 1]),
+    )
+
+    assert result["passed"] is False
+    assert any(
+        "ROC-AUC" in reason
+        for reason in result["reasons"]
+    )
+
+
+def test_model_validation_rejects_invalid_metrics():
+    from src.models.train import validate_model_for_registration
+
+    result = validate_model_for_registration(
+        {
+            "pr_auc": float("nan"),
+            "roc_auc": 0.75,
+        },
+        pd.Series([0, 0, 0, 1, 1]),
+    )
+
+    assert result["passed"] is False
+
+
+def test_failed_validation_blocks_model_registration(monkeypatch):
+    from src.models import train
+
+    mock_register = Mock()
+
+    monkeypatch.setattr(
+        train.mlflow,
+        "register_model",
+        mock_register,
+    )
+
+    with pytest.raises(ValueError, match="failed validation"):
+        train.register_model_if_valid(
+            model_id="test-model-id",
+            metrics={
+                "pr_auc": 0.05,
+                "roc_auc": 0.45,
+            },
+            y_val=pd.Series([0, 0, 0, 0, 1, 1]),
+        )
+
+    mock_register.assert_not_called()
+
+
+def test_validation_metadata_is_logged_to_selected_run(monkeypatch):
+    from src.models import train
+
+    logged = {}
+
+    class FakeRun:
+        def __init__(self, run_id):
+            self.info = Mock(run_id=run_id)
+
+        def __enter__(self):
+            logged["run_id"] = self.info.run_id
+            return self
+
+        def __exit__(self, exc_type, exc_value, traceback):
+            return False
+
+    monkeypatch.setattr(
+        train.mlflow,
+        "start_run",
+        lambda run_id=None, **kwargs: FakeRun(run_id),
+    )
+
+    monkeypatch.setattr(
+        train.mlflow,
+        "log_params",
+        lambda params: logged.update(params),
+    )
+
+    monkeypatch.setattr(
+        train.mlflow,
+        "log_metrics",
+        lambda metrics: logged.update(metrics),
+    )
+
+    monkeypatch.setattr(
+        train.mlflow,
+        "set_tag",
+        lambda key, value: logged.update({key: value}),
+    )
+
+    train.log_validation_metadata(
+        "selected-run-123",
+        {
+            "passed": True,
+            "baseline_pr_auc": 0.10,
+        },
+    )
+
+    assert logged["run_id"] == "selected-run-123"
+    assert logged["validation_gate_passed"] == "True"
+    assert logged["validation_gate_rule"] == (
+        "pr_auc_above_baseline_and_roc_auc_above_0.5"
+    )
+    assert logged["validation_baseline_pr_auc"] == 0.10
+    assert logged["validation_gate_status"] == "passed"
+
+def test_model_validation_handles_missing_and_non_numeric_metrics():
+    from src.models.train import validate_model_for_registration
+
+    y_val = pd.Series([0, 0, 0, 1, 1])
+
+    missing_metric = validate_model_for_registration(
+        {"pr_auc": 0.40},
+        y_val,
+    )
+
+    non_numeric_metric = validate_model_for_registration(
+        {
+            "pr_auc": "invalid",
+            "roc_auc": 0.75,
+        },
+        y_val,
+    )
+
+    assert missing_metric["passed"] is False
+    assert missing_metric["roc_auc"] is None
+
+    assert non_numeric_metric["passed"] is False
+    assert non_numeric_metric["pr_auc"] is None
