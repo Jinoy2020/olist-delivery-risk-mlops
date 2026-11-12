@@ -153,8 +153,24 @@ def evaluate_model(name, model, X_val, y_val):
 
     return metrics
 
+def register_best_model(model_id, model_name="olist-delivery-risk-classifier"):
+    """Register the selected MLflow model without promoting it."""
 
-def main(model_dir=None):
+    model_uri = f"models:/{model_id}"
+
+    registered_model = mlflow.register_model(
+        model_uri=model_uri,
+        name=model_name,
+    )
+
+    print(
+        f"Registered model: {registered_model.name}, "
+        f"version: {registered_model.version}"
+    )
+
+    return registered_model
+
+def main(model_dir=None, register_model=False):
     model_dir = Path(model_dir) if model_dir is not None else MODEL_DIR
     model_dir.mkdir(parents=True, exist_ok=True)
     mlflow.set_tracking_uri("sqlite:///mlflow.db")
@@ -198,6 +214,7 @@ def main(model_dir=None):
 
     results = []
     trained_models = {}
+    trained_model_ids = {}
 
     for name, classifier in models.items():
         print(f"\nTraining {name}...")
@@ -245,7 +262,7 @@ def main(model_dir=None):
 
         
                         # Log trained pipeline
-            mlflow.sklearn.log_model(
+            model_info = mlflow.sklearn.log_model(
                 pipeline,
                 name=f"{name}_model",
                 skops_trusted_types=[
@@ -254,11 +271,13 @@ def main(model_dir=None):
                 ],
             )
 
+            trained_model_ids[name] = model_info.model_id
+
         print(f"Validation metrics: {metrics}")
         results.append(metrics)
         trained_models[name] = pipeline
 
-        print(f"Validation metrics: {metrics}")
+      
 
     results_df = pd.DataFrame(results)
     results_df = results_df.sort_values(
@@ -271,6 +290,9 @@ def main(model_dir=None):
 
     best_name = results_df.iloc[0]["model"]
     best_model = trained_models[best_name]
+
+    best_model_id = trained_model_ids[best_name]
+    print(f"Selected MLflow model ID: {best_model_id}")
 
     model_path = model_dir / "best_model.joblib"
     metrics_path = model_dir / "validation_metrics.json"
@@ -290,7 +312,22 @@ def main(model_dir=None):
     print(f"\nBest model: {best_name}")
     print(f"Saved model: {model_path}")
     print(f"Saved metrics: {metrics_path}")
+    registered_model = None
 
+    if register_model:
+        registered_model = register_best_model(best_model_id)
+    return {
+    "best_model": best_name,
+    "model_id": best_model_id,
+    "registered_model": (
+        {
+            "name": registered_model.name,
+            "version": registered_model.version,
+        }
+        if registered_model is not None
+        else None
+    ),
+}
 
 if __name__ == "__main__":
     main()

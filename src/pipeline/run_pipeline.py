@@ -29,6 +29,7 @@ def run_data_pipeline(
     dry_run=False,
     train_only=False,
     overwrite_model=False,
+    register_model=False,
 ):
     """Execute data validation, feature engineering and splitting."""
 
@@ -108,8 +109,10 @@ def run_data_pipeline(
             from src.models import train
 
             model_output_dir = run_dir / "models"
-            train.main(model_dir=model_output_dir)
-
+            training_result = train.main(
+                model_dir=model_output_dir,
+                register_model=register_model,
+            )
            
             model_path = model_output_dir / "best_model.joblib"
             metrics_path = model_output_dir / "validation_metrics.json"
@@ -139,6 +142,13 @@ def run_data_pipeline(
                 "best_model": validation_results["best_model"],
                 "metrics": best_model_metrics,
             }
+
+            if register_model:
+                results["stages"]["model_registration"] = {
+                    "status": "success",
+                    "model_name": training_result["registered_model"]["name"],
+                    "version": training_result["registered_model"]["version"],
+                }
 
         else:
             print("\n[1/3] Validating raw datasets...")
@@ -197,11 +207,17 @@ if __name__ == "__main__":
         action="store_true",
         help="Train a model using existing train and validation datasets.",
     )
+    parser.add_argument(
+    "--register-model",
+    action="store_true",
+    help="Register the selected model in MLflow Model Registry.",
+)
 
     args = parser.parse_args()
 
     run_data_pipeline(
-        overwrite=args.overwrite,
-        dry_run=args.dry_run,
-        train_only=args.train_only,
-    )
+    overwrite=args.overwrite,
+    dry_run=args.dry_run,
+    train_only=args.train_only,
+    register_model=args.register_model,
+)

@@ -8,6 +8,8 @@ on:
     branches: [main]
 
 jobs:
+
+  # 1. FastAPI tests
   api-test:
     name: FastAPI Tests
     runs-on: ubuntu-latest
@@ -34,6 +36,40 @@ jobs:
         run: |
           python -m pytest tests/test_api.py -v
 
+
+  # 2. Core project tests
+  core-test:
+    name: Data, Feature Engineering and Pipeline Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install project dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run data validation tests
+        run: |
+          python -m pytest tests/test_data_validation.py -v
+
+      - name: Run feature engineering tests
+        run: |
+          python -m pytest tests/test_feature_engineering.py -v
+
+      - name: Run pipeline tests
+        run: |
+          python -m pytest tests/test_pipeline.py -v
+
+
+  # 3. Feast feature store tests
   feast-test:
     name: Feast Feature Store Tests
     runs-on: ubuntu-latest
@@ -52,11 +88,10 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements-feast-ci.txt
 
-      - name: Run Data and Feast tests
+      - name: Run Feast CI tests
         run: |
-          python -m pytest \
-            tests/test_data_validation.py \
-            tests/test_feature_engineering.py \
-            tests/test_feast_ci.py \
-            tests/test_pipeline.py \
-            -v
+          python -m pytest tests/test_feast_ci.py -v
+
+      - name: Run Feast historical feature tests
+        run: |
+          python -m pytest tests/test_feast_historical.py -v
