@@ -95,3 +95,16 @@ jobs:
       - name: Run Feast historical feature tests
         run: |
           python -m pytest tests/test_feast_historical.py -v
+
+  # 4. Docker image build verification
+  docker-build:
+    name: Docker Build Verification
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Build Docker image
+        run: |
+          docker build -t olist-delivery-risk-api:ci .
