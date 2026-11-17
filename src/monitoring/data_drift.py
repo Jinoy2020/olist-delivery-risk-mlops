@@ -5,13 +5,21 @@ import pandas as pd
 import requests
 from evidently import Report
 from evidently.presets import DataDriftPreset
-from src.monitoring.drift_alerts import evaluate_drift
+
+from src.monitoring.drift_alerts import (
+    evaluate_drift,
+    save_monitoring_status,
+)
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 REFERENCE_PATH = PROJECT_ROOT / "data" / "processed" / "train.csv"
-API_URL = "http://localhost:8000/monitoring/predictions?limit=1000"
+
+API_URL = (
+    "http://localhost:8000/monitoring/predictions"
+    "?limit=1000&traffic_source=production"
+)
 
 REPORT_DIR = PROJECT_ROOT / "reports"
 REPORT_PATH = REPORT_DIR / "data_drift_report.html"
@@ -42,7 +50,7 @@ def load_current_data():
     records = response.json()["predictions"]
 
     if not records:
-        raise ValueError("No prediction records available.")
+        return pd.DataFrame(columns=FEATURES)
 
     df = pd.DataFrame([
         record["input_features"] for record in records
@@ -52,15 +60,23 @@ def load_current_data():
 
 
 def generate_drift_report():
-    reference_data = load_reference_data()
     current_data = load_current_data()
 
     if len(current_data) < MINIMUM_RECORDS:
-        raise ValueError(
-            f"Not enough prediction records for drift analysis. "
-            f"Required: {MINIMUM_RECORDS}, "
-            f"available: {len(current_data)}"
+        status = save_monitoring_status(
+            status="INSUFFICIENT_DATA",
+            current_records=len(current_data),
+            message=(
+                f"Waiting for at least {MINIMUM_RECORDS} "
+                "production prediction records."
+            ),
         )
+
+        print("\nDrift analysis skipped.")
+        print(status["message"])
+        return status
+
+    reference_data = load_reference_data()
 
     print("Reference dataset:", reference_data.shape)
     print("Current dataset:", current_data.shape)
@@ -73,7 +89,12 @@ def generate_drift_report():
         reference_data=reference_data,
         current_data=current_data,
     )
-    alert_summary = evaluate_drift(result.metric_results)
+
+    alert_summary = evaluate_drift(
+        result.metric_results,
+        current_records=len(current_data),
+    )
+
     print("\nFeature drift scores:")
 
     for metric_result in result.metric_results.values():
@@ -88,8 +109,11 @@ def generate_drift_report():
 
     REPORT_DIR.mkdir(parents=True, exist_ok=True)
     result.save_html(str(REPORT_PATH))
+
     print("Drift alert status:", alert_summary["overall_status"])
     print(f"\nDrift report saved to: {REPORT_PATH}")
+
+    return alert_summary
 
 
 if __name__ == "__main__":

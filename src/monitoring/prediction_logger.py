@@ -10,6 +10,8 @@ DB_PATH = Path(
     os.getenv("MONITORING_DB_PATH", "monitoring.db")
 )
 
+VALID_TRAFFIC_SOURCES = {"test", "production", "unknown"}
+
 
 def log_prediction(
     input_features: dict,
@@ -18,7 +20,13 @@ def log_prediction(
     model_name: str,
     model_version: str,
     order_id: str | None = None,
+    traffic_source: str = "unknown",
 ):
+    if traffic_source not in VALID_TRAFFIC_SOURCES:
+        raise ValueError(
+            f"Invalid traffic source: {traffic_source}"
+        )
+
     with sqlite3.connect(DB_PATH, timeout=5) as connection:
         connection.execute("""
             CREATE TABLE IF NOT EXISTS predictions (
@@ -29,7 +37,8 @@ def log_prediction(
                 prediction INTEGER NOT NULL,
                 delay_probability REAL NOT NULL,
                 model_name TEXT NOT NULL,
-                model_version TEXT NOT NULL
+                model_version TEXT NOT NULL,
+                traffic_source TEXT NOT NULL DEFAULT 'unknown'
             )
         """)
 
@@ -45,6 +54,12 @@ def log_prediction(
                 "ALTER TABLE predictions ADD COLUMN order_id TEXT"
             )
 
+        if "traffic_source" not in columns:
+            connection.execute("""
+                ALTER TABLE predictions
+                ADD COLUMN traffic_source TEXT NOT NULL DEFAULT 'unknown'
+            """)
+
         connection.execute("""
             INSERT INTO predictions (
                 timestamp,
@@ -53,9 +68,10 @@ def log_prediction(
                 prediction,
                 delay_probability,
                 model_name,
-                model_version
+                model_version,
+                traffic_source
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             datetime.now(timezone.utc).isoformat(),
             order_id,
@@ -64,4 +80,5 @@ def log_prediction(
             delay_probability,
             model_name,
             model_version,
+            traffic_source,
         ))

@@ -37,6 +37,7 @@ def main():
         response = requests.post(
             API_URL,
             json=payload,
+            headers={"X-Traffic-Source": "test"},
             timeout=15,
         )
 

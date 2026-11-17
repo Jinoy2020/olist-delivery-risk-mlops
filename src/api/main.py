@@ -216,7 +216,7 @@ def get_features_from_feast(order_id: str) -> dict:
     return features
 
 @app.post("/predict-with-feast/{order_id}")
-def predict_with_feast(order_id: str):
+def predict_with_feast(order_id: str, request: Request):
     try:
         features = get_features_from_feast(order_id)
 
@@ -229,7 +229,12 @@ def predict_with_feast(order_id: str):
         probabilities = model.predict_proba(input_data)[0]
 
         delay_probability = float(probabilities[1])
+        traffic_source = request.headers.get(
+    "X-Traffic-Source", "unknown"
+        ).lower()
 
+        if traffic_source not in {"test", "production"}:
+            traffic_source = "unknown"
         log_prediction(
             input_features=order.model_dump(),
             prediction=prediction,
@@ -237,6 +242,7 @@ def predict_with_feast(order_id: str):
             model_name=MODEL_NAME,
             order_id=order_id,
             model_version=MODEL_VERSION,
+            traffic_source=traffic_source,
         )
 
         return {
@@ -404,21 +410,37 @@ def get_performance_alerts(
         ) from exc
 
 @app.get("/monitoring/predictions")
-def get_monitoring_predictions(limit: int = Query(default=100, ge=1, le=1000)):
+def get_monitoring_predictions(
+    limit: int = Query(default=100, ge=1, le=1000),
+    traffic_source: str | None = None,
+):
     try:
         with sqlite3.connect(DB_PATH) as connection:
             connection.row_factory = sqlite3.Row
 
-            rows = connection.execute(
-                """
+            query = """
                 SELECT timestamp, order_id, input_features, prediction,
-                delay_probability, model_name, model_version
+                       delay_probability, model_name, model_version,
+                       traffic_source
                 FROM predictions
-                ORDER BY timestamp DESC
-                LIMIT ?
-                """,
-                (limit,),
-            ).fetchall()
+            """
+
+            params = []
+
+            if traffic_source is not None:
+                if traffic_source not in {"test", "production", "unknown"}:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Invalid traffic_source filter.",
+                    )
+
+                query += " WHERE traffic_source = ?"
+                params.append(traffic_source)
+
+            query += " ORDER BY timestamp DESC LIMIT ?"
+            params.append(limit)
+
+            rows = connection.execute(query, params).fetchall()
 
         return {
             "total_returned": len(rows),
@@ -433,6 +455,7 @@ def get_monitoring_predictions(limit: int = Query(default=100, ge=1, le=1000)):
                     "delay_probability": row["delay_probability"],
                     "model_name": row["model_name"],
                     "model_version": row["model_version"],
+                    "traffic_source": row["traffic_source"],
                 }
                 for row in rows
             ],
@@ -444,9 +467,9 @@ def get_monitoring_predictions(limit: int = Query(default=100, ge=1, le=1000)):
             detail="Unable to retrieve monitoring predictions.",
         ) from exc
 
-@app.post("/predict")
-def predict(order: OrderFeatures):
 
+@app.post("/predict")
+def predict(order: OrderFeatures, request: Request):
     try:
         input_data = pd.DataFrame([order.model_dump()])
 
@@ -454,13 +477,19 @@ def predict(order: OrderFeatures):
         probabilities = model.predict_proba(input_data)[0]
 
         delay_probability = float(probabilities[1])
+        traffic_source = request.headers.get(
+    "X-Traffic-Source", "unknown"
+        ).lower()
 
+        if traffic_source not in {"test", "production"}:
+            traffic_source = "unknown"
         log_prediction(
             input_features=order.model_dump(),
             prediction=prediction,
             delay_probability=delay_probability,
             model_name=MODEL_NAME,
             model_version=MODEL_VERSION,
+            traffic_source=traffic_source,
         )
 
         return {

@@ -450,6 +450,7 @@ else:
 
 st.divider()
 
+
 # Data drift monitoring
 st.subheader("Data Drift Monitoring")
 
@@ -462,23 +463,41 @@ if DRIFT_ALERT_PATH.exists():
 
         status = alert_data.get("overall_status", "UNKNOWN")
 
-        if status == "DRIFT_DETECTED":
-            st.error("⚠️ Data Drift Detected")
+        if status == "INSUFFICIENT_DATA":
+            st.warning(
+                "Insufficient Production Data"
+            )
+            st.info(
+                alert_data.get(
+                    "message",
+                    "Waiting for sufficient production prediction records."
+                )
+            )
+
+        elif status == "INSUFFICIENT_METRICS":
+            st.warning(
+                "Insufficient Drift Metrics"
+            )
+
+        elif status == "DRIFT_DETECTED":
+            st.error("Data Drift Detected")
+
         elif status == "NO_DRIFT":
-            st.success("✅ No Significant Drift Detected")
+            st.success("No Significant Drift Detected")
+
         else:
             st.warning(f"Unknown drift status: {status}")
 
         col1, col2, col3 = st.columns(3)
 
         col1.metric(
-            "Features Checked",
-            alert_data.get("features_checked", 0)
+            "Current Production Records",
+            alert_data.get("current_records", 0)
         )
 
         col2.metric(
-            "Features with Drift",
-            alert_data.get("features_with_drift", 0)
+            "Minimum Required Records",
+            alert_data.get("minimum_records", 100)
         )
 
         col3.metric(
@@ -487,47 +506,94 @@ if DRIFT_ALERT_PATH.exists():
         )
 
         st.caption(
-            f"Last analysis: {alert_data.get('timestamp', 'Unknown')}"
+            f"Latest monitoring update: "
+            f"{alert_data.get('timestamp', 'Unknown')}"
         )
 
-        scores = alert_data.get("feature_scores", {})
+        previous_analysis = alert_data.get(
+            "last_successful_analysis"
+        )
 
-        if scores:
-            st.subheader("Feature Drift Scores")
+        if previous_analysis:
+            st.divider()
+            st.subheader("Last Successful Drift Analysis")
 
-            score_df = pd.DataFrame(
-                list(scores.items()),
-                columns=["Feature", "Drift Score"]
-            ).sort_values("Drift Score", ascending=False)
-
-            st.bar_chart(
-                score_df.set_index("Feature")
+            st.caption(
+                f"Analysis timestamp: "
+                f"{previous_analysis.get('timestamp', 'Unknown')}"
             )
 
-        alerts = alert_data.get("alerts", [])
+            col1, col2 = st.columns(2)
 
-        if alerts:
-            st.subheader("Detected Drift Alerts")
-            st.dataframe(
-                pd.DataFrame(alerts),
-                width="stretch"
+            col1.metric(
+                "Features Checked",
+                previous_analysis.get("features_checked", 0)
             )
 
-    except (json.JSONDecodeError, OSError, TypeError, ValueError) as exc:
+            col2.metric(
+                "Features with Drift",
+                previous_analysis.get("features_with_drift", 0)
+            )
+
+            scores = previous_analysis.get(
+                "feature_scores", {}
+            )
+
+            if scores:
+                st.subheader("Historical Feature Drift Scores")
+
+                score_df = pd.DataFrame(
+                    list(scores.items()),
+                    columns=["Feature", "Drift Score"]
+                ).sort_values(
+                    "Drift Score",
+                    ascending=False
+                )
+
+                st.bar_chart(
+                    score_df.set_index("Feature")
+                )
+
+            historical_alerts = previous_analysis.get(
+                "alerts", []
+            )
+
+            if historical_alerts:
+                st.subheader("Historical Drift Alerts")
+                st.dataframe(
+                    pd.DataFrame(historical_alerts),
+                    width="stretch"
+                )
+
+        else:
+            st.info(
+                "No successful drift analysis is available yet."
+            )
+
+    except (
+        json.JSONDecodeError,
+        OSError,
+        TypeError,
+        ValueError,
+    ) as exc:
         st.error(f"Unable to read drift alerts: {exc}")
 
 else:
-    st.warning("No drift alert data found. Run the drift monitoring script first.")
+    st.warning(
+        "No drift monitoring status found. "
+        "Run the drift monitoring script first."
+    )
 
 if DRIFT_REPORT_PATH.exists():
-    with st.expander("View Detailed Evidently HTML Report"):
-        report_html = DRIFT_REPORT_PATH.read_text(encoding="utf-8")
+    with st.expander("View Last Successful Evidently HTML Report"):
+        report_html = DRIFT_REPORT_PATH.read_text(
+            encoding="utf-8"
+        )
         st.html(report_html)
 
 st.info(
-    "Drift alerts are based on the latest completed analysis. "
-    "Current prediction records include generated test traffic, "
-    "not verified production traffic."
+    "Drift detection uses production-labelled prediction records only. "
+    "Generated test traffic is excluded from production drift analysis."
 )
 
 
