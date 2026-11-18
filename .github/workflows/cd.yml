@@ -1,3 +1,4 @@
+
 name: Olist Delivery Risk CD
 
 on:
@@ -16,6 +17,7 @@ jobs:
     name: Deploy to AWS EC2 through SSM
     if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main' }}
     runs-on: ubuntu-latest
+
     steps:
       - name: Inspect GitHub OIDC claims (safe metadata only)
         env:
@@ -23,7 +25,12 @@ jobs:
           ACTIONS_ID_TOKEN_REQUEST_TOKEN: ${{ env.ACTIONS_ID_TOKEN_REQUEST_TOKEN }}
         run: |
           set -euo pipefail
-          TOKEN=$(curl -fsS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=sts.amazonaws.com" | jq -r .value)
+
+          TOKEN=$(curl -fsS \
+            -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=sts.amazonaws.com" \
+            | jq -r .value)
+
           OIDC_TOKEN="$TOKEN" node -e 'const c=JSON.parse(Buffer.from(process.env.OIDC_TOKEN.split(".")[1],"base64url").toString()); console.log(JSON.stringify({iss:c.iss,aud:c.aud,sub:c.sub,repository:c.repository,ref:c.ref,event_name:c.event_name,workflow:c.workflow},null,2))'
 
       - name: Configure AWS credentials
@@ -32,8 +39,6 @@ jobs:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ap-south-1
 
-     
-     
       - name: Send deployment command to EC2
         env:
           DEPLOY_SHA: ${{ github.event.workflow_run.head_sha }}
@@ -41,18 +46,25 @@ jobs:
           set -euo pipefail
 
           REMOTE_SCRIPT=$(cat <<'REMOTE'
-          set -euo pipefail
+          set -eu
 
           cd /home/ubuntu/olist-delivery-risk-mlops
+
+          echo "Fetching latest repository changes..."
           git fetch origin main
           git reset --hard __DEPLOY_SHA__
 
-          sudo docker build -t olist-delivery-risk-api:candidate .
+          echo "Saving currently running image for rollback..."
+          CURRENT_IMAGE_ID=$(sudo docker inspect --format='{{.Image}}' olist-delivery-risk-api 2>/dev/null || true)
 
-          if sudo docker image inspect olist-delivery-risk-api:latest >/dev/null 2>&1; then
-            sudo docker tag olist-delivery-risk-api:latest olist-delivery-risk-api:previous
+          if [ -n "$CURRENT_IMAGE_ID" ]; then
+            sudo docker tag "$CURRENT_IMAGE_ID" olist-delivery-risk-api:previous
           fi
 
+          echo "Building candidate Docker image..."
+          sudo docker build -t olist-delivery-risk-api:candidate .
+
+          echo "Replacing API container..."
           sudo docker stop olist-delivery-risk-api || true
           sudo docker rm olist-delivery-risk-api || true
 
@@ -64,16 +76,19 @@ jobs:
             -v /home/ubuntu/olist-api-data:/data \
             olist-delivery-risk-api:candidate
 
+          echo "Checking API health..."
+
           for attempt in $(seq 1 20); do
             if curl --fail --silent http://localhost:8000/; then
               sudo docker tag olist-delivery-risk-api:candidate olist-delivery-risk-api:latest
               echo "Deployment and health check successful."
               exit 0
             fi
+
             sleep 3
           done
 
-          echo "API health check failed."
+          echo "API health check failed. Attempting rollback..."
 
           sudo docker stop olist-delivery-risk-api || true
           sudo docker rm olist-delivery-risk-api || true
@@ -86,6 +101,10 @@ jobs:
               -e MONITORING_DB_PATH=/data/monitoring.db \
               -v /home/ubuntu/olist-api-data:/data \
               olist-delivery-risk-api:previous
+
+            echo "Previous image restarted."
+          else
+            echo "No previous image available for rollback."
           fi
 
           exit 1
@@ -93,6 +112,7 @@ jobs:
           )
 
           REMOTE_SCRIPT="${REMOTE_SCRIPT//__DEPLOY_SHA__/$DEPLOY_SHA}"
+
           PARAMETERS=$(jq -n --arg script "$REMOTE_SCRIPT" '{commands: [$script]}')
 
           COMMAND_ID=$(aws ssm send-command \
@@ -119,6 +139,7 @@ jobs:
                 --instance-id "i-0c98384d067e8b7cf" \
                 --query "StandardOutputContent" \
                 --output text
+
               exit 0
             fi
 
@@ -127,6 +148,7 @@ jobs:
                 --command-id "$COMMAND_ID" \
                 --instance-id "i-0c98384d067e8b7cf" \
                 --output json
+
               exit 1
             fi
 
