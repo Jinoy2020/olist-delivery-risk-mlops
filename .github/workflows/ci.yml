@@ -96,6 +96,29 @@ jobs:
         run: |
           python -m pytest tests/test_feast_historical.py -v
 
+  # 4. Monitoring and drift detection tests
+  monitoring-test:
+    name: Monitoring and Drift Detection Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install monitoring dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run monitoring tests
+        run: |
+          python -m pytest tests/test_monitoring.py tests/test_monitoring_drift_alerts.py -v
+
   # 4. Docker image build verification
   docker-build:
     name: Docker Build Verification

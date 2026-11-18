@@ -73,7 +73,14 @@ def generate_drift_report():
         )
 
         print("\nDrift analysis skipped.")
-        print(status["message"])
+
+        message = status.get(
+            "message",
+            f"Waiting for at least {MINIMUM_RECORDS} "
+            "production prediction records."
+        )
+
+        print(message)
         return status
 
     reference_data = load_reference_data()
