@@ -1,0 +1,90 @@
+name: Olist Delivery Risk CD
+
+on:
+  workflow_run:
+    workflows: ["Olist Delivery Risk CI"]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  deploy:
+    name: Deploy to AWS EC2
+    if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main' }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Deploy latest main to EC2
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USERNAME }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          fingerprint: ${{ secrets.EC2_HOST_FINGERPRINT }}
+          command_timeout: 20m
+          script: |
+            set -eu
+
+            cd /home/ubuntu/olist-delivery-risk-mlops
+            git fetch origin main
+            git reset --hard origin/main
+
+            # Build the candidate image before touching the live container.
+            sudo docker build -t olist-delivery-risk-api:candidate .
+
+            # Keep the currently deployed image available for rollback.
+            if sudo docker image inspect olist-delivery-risk-api:latest >/dev/null 2>&1; then
+              sudo docker tag olist-delivery-risk-api:latest olist-delivery-risk-api:previous
+            fi
+
+            # Replace the container while keeping monitoring data on the host.
+            sudo docker stop olist-delivery-risk-api || true
+            sudo docker rm olist-delivery-risk-api || true
+
+            if ! sudo docker run -d \
+              --name olist-delivery-risk-api \
+              --restart unless-stopped \
+              -p 8000:8000 \
+              -e MONITORING_DB_PATH=/data/monitoring.db \
+              -v /home/ubuntu/olist-api-data:/data \
+              olist-delivery-risk-api:candidate; then
+              echo "Candidate container failed to start; attempting rollback."
+              sudo docker rm -f olist-delivery-risk-api || true
+              sudo docker run -d \
+                --name olist-delivery-risk-api \
+                --restart unless-stopped \
+                -p 8000:8000 \
+                -e MONITORING_DB_PATH=/data/monitoring.db \
+                -v /home/ubuntu/olist-api-data:/data \
+                olist-delivery-risk-api:previous
+              exit 1
+            fi
+
+            # Wait for the API, then roll back if its health endpoint fails.
+            healthy=0
+            for attempt in $(seq 1 20); do
+              if curl --fail --silent http://localhost:8000/ >/dev/null; then
+                healthy=1
+                break
+              fi
+              sleep 3
+            done
+
+            if [ "$healthy" -ne 1 ]; then
+              echo "Candidate API did not become healthy; rolling back."
+              sudo docker rm -f olist-delivery-risk-api || true
+              sudo docker run -d \
+                --name olist-delivery-risk-api \
+                --restart unless-stopped \
+                -p 8000:8000 \
+                -e MONITORING_DB_PATH=/data/monitoring.db \
+                -v /home/ubuntu/olist-api-data:/data \
+                olist-delivery-risk-api:previous
+              exit 1
+            fi
+
+            sudo docker tag olist-delivery-risk-api:candidate olist-delivery-risk-api:latest
+            echo "Deployment successful."
