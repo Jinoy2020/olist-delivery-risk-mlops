@@ -17,20 +17,23 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Deploy latest main to EC2
+      - name: Deploy CI-tested commit to EC2
         uses: appleboy/ssh-action@v1.2.0
+        env:
+          DEPLOY_SHA: ${{ github.event.workflow_run.head_sha }}
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ${{ secrets.EC2_USERNAME }}
           key: ${{ secrets.EC2_SSH_KEY }}
           fingerprint: ${{ secrets.EC2_HOST_FINGERPRINT }}
           command_timeout: 20m
+          envs: DEPLOY_SHA
           script: |
             set -eu
 
             cd /home/ubuntu/olist-delivery-risk-mlops
-            git fetch origin main
-            git reset --hard origin/main
+            git fetch origin "$DEPLOY_SHA"
+            git reset --hard "$DEPLOY_SHA"
 
             # Build the candidate image before touching the live container.
             sudo docker build -t olist-delivery-risk-api:candidate .
