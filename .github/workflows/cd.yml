@@ -32,32 +32,117 @@ jobs:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ap-south-1
 
+     
       - name: Send deployment command to EC2
         env:
           DEPLOY_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           set -euo pipefail
+
+          REMOTE_SCRIPT=$(cat <<EOF
+          set -Eeuo pipefail
+
+          cd /home/ubuntu/olist-delivery-risk-mlops
+
+          echo "Deploying commit: $DEPLOY_SHA"
+
+          git fetch origin main
+          git reset --hard "$DEPLOY_SHA"
+
+          echo "Building candidate Docker image..."
+          sudo docker build -t olist-delivery-risk-api:candidate .
+
+          echo "Saving current image for rollback..."
+          sudo docker image inspect olist-delivery-risk-api:latest >/dev/null
+          sudo docker tag olist-delivery-risk-api:latest olist-delivery-risk-api:previous
+
+          echo "Replacing running container..."
+          sudo docker stop olist-delivery-risk-api || true
+          sudo docker rm olist-delivery-risk-api || true
+
+          start_container() {
+            sudo docker run -d \
+              --name olist-delivery-risk-api \
+              --restart unless-stopped \
+              -p 8000:8000 \
+              -e MONITORING_DB_PATH=/data/monitoring.db \
+              -v /home/ubuntu/olist-api-data:/data \
+              "$1"
+          }
+
+          echo "Starting candidate..."
+          start_container olist-delivery-risk-api:candidate
+
+          for attempt in $(seq 1 20); do
+            if curl --fail --silent http://localhost:8000/; then
+              echo "Candidate health check passed."
+              sudo docker tag olist-delivery-risk-api:candidate olist-delivery-risk-api:latest
+              exit 0
+            fi
+            sleep 3
+          done
+
+          echo "Candidate health check failed. Rolling back..."
+
+          sudo docker logs --tail 50 olist-delivery-risk-api || true
+          sudo docker stop olist-delivery-risk-api || true
+          sudo docker rm olist-delivery-risk-api || true
+
+          start_container olist-delivery-risk-api:previous
+
+          for attempt in $(seq 1 20); do
+            if curl --fail --silent http://localhost:8000/; then
+              echo "Rollback successful. Previous version is running."
+              exit 1
+            fi
+            sleep 3
+          done
+
+          echo "CRITICAL: Rollback container also failed its health check."
+          sudo docker logs --tail 50 olist-delivery-risk-api || true
+          exit 1
+          EOF
+          )
+
+          PARAMETERS=$(jq -cn --arg cmd "$REMOTE_SCRIPT" '{commands: [$cmd]}')
+
           COMMAND_ID=$(aws ssm send-command \
             --instance-ids "i-0c98384d067e8b7cf" \
             --document-name "AWS-RunShellScript" \
-            --parameters 'commands=["cd /home/ubuntu/olist-delivery-risk-mlops && git fetch origin main && git reset --hard '$DEPLOY_SHA' && sudo docker build -t olist-delivery-risk-api:candidate . && sudo docker tag olist-delivery-risk-api:latest olist-delivery-risk-api:previous && (sudo docker stop olist-delivery-risk-api || true) && (sudo docker rm olist-delivery-risk-api || true) && sudo docker run -d --name olist-delivery-risk-api --restart unless-stopped -p 8000:8000 -e MONITORING_DB_PATH=/data/monitoring.db -v /home/ubuntu/olist-api-data:/data olist-delivery-risk-api:candidate && for attempt in $(seq 1 20); do curl --fail --silent http://localhost:8000/ && sudo docker tag olist-delivery-risk-api:candidate olist-delivery-risk-api:latest && exit 0; sleep 3; done; echo API health check failed; exit 1"]' \
-            --timeout-seconds 60 \
+            --parameters "$PARAMETERS" \
+            --timeout-seconds 180 \
             --comment "Deploy Olist API commit $DEPLOY_SHA" \
             --query "Command.CommandId" \
             --output text)
+
           echo "SSM command ID: $COMMAND_ID"
 
           for attempt in $(seq 1 240); do
-            STATUS=$(aws ssm get-command-invocation --command-id "$COMMAND_ID" --instance-id "i-0c98384d067e8b7cf" --query "Status" --output text 2>/dev/null || true)
+            STATUS=$(aws ssm get-command-invocation \
+              --command-id "$COMMAND_ID" \
+              --instance-id "i-0c98384d067e8b7cf" \
+              --query "Status" \
+              --output text 2>/dev/null || true)
+
             if [ "$STATUS" = "Success" ]; then
-              aws ssm get-command-invocation --command-id "$COMMAND_ID" --instance-id "i-0c98384d067e8b7cf" --query "StandardOutputContent" --output text
+              aws ssm get-command-invocation \
+                --command-id "$COMMAND_ID" \
+                --instance-id "i-0c98384d067e8b7cf" \
+                --query "StandardOutputContent" \
+                --output text
               exit 0
             fi
+
             if [ "$STATUS" = "Failed" ] || [ "$STATUS" = "TimedOut" ] || [ "$STATUS" = "Cancelled" ]; then
-              aws ssm get-command-invocation --command-id "$COMMAND_ID" --instance-id "i-0c98384d067e8b7cf" --output json
+              aws ssm get-command-invocation \
+                --command-id "$COMMAND_ID" \
+                --instance-id "i-0c98384d067e8b7cf" \
+                --output json
               exit 1
             fi
+
             sleep 5
           done
+
           echo "Timed out waiting for deployment."
           exit 1
