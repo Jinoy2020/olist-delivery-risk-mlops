@@ -115,14 +115,18 @@ def evaluate_drift(metric_results, current_records=None):
         "features_with_drift": len(alerts),
         "feature_scores": feature_scores,
         "alerts": alerts,
-        "last_successful_analysis": None,
+        "last_successful_analysis": previous_analysis,
     }
 
-    result["last_successful_analysis"] = {
-        key: value
-        for key, value in result.items()
-        if key != "last_successful_analysis"
-    }
+    # Only replace the historical successful analysis when this run
+    # contains usable feature-drift metrics. An empty/invalid result is
+    # a monitoring status, not a successful analysis.
+    if feature_scores:
+        result["last_successful_analysis"] = {
+            key: value
+            for key, value in result.items()
+            if key != "last_successful_analysis"
+        }
 
     ALERT_PATH.parent.mkdir(parents=True, exist_ok=True)
 
