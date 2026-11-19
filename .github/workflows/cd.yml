@@ -73,6 +73,7 @@ jobs:
             --restart unless-stopped \
             -p 8000:8000 \
             -e MONITORING_DB_PATH=/data/monitoring.db \
+            -e MONITORING_DATA_DIR=/data \
             -v /home/ubuntu/olist-api-data:/data \
             olist-delivery-risk-api:candidate
 
