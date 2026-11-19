@@ -1,6 +1,6 @@
 
 from pathlib import Path
-
+from src.monitoring.storage import DRIFT_REPORT_PATH
 import pandas as pd
 import requests
 from evidently import Report
@@ -20,9 +20,7 @@ API_URL = (
     "http://localhost:8000/monitoring/predictions"
     "?limit=1000&traffic_source=production"
 )
-
-REPORT_DIR = PROJECT_ROOT / "reports"
-REPORT_PATH = REPORT_DIR / "data_drift_report.html"
+REPORT_PATH = DRIFT_REPORT_PATH
 
 FEATURES = [
     "purchase_month",
@@ -114,7 +112,7 @@ def generate_drift_report():
                 details.get("value"),
             )
 
-    REPORT_DIR.mkdir(parents=True, exist_ok=True)
+    REPORT_PATH.parent.mkdir(parents=True, exist_ok=True)
     result.save_html(str(REPORT_PATH))
 
     print("Drift alert status:", alert_summary["overall_status"])

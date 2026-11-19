@@ -205,3 +205,83 @@ def test_predict_with_feast_server_unavailable(mock_get_features):
     assert response.json()["detail"] == (
         "Unable to connect to Feast feature server."
     )
+import json
+from pathlib import Path
+
+import src.api.main as api_main
+
+
+def test_monitoring_drift_returns_status(tmp_path, monkeypatch):
+    alert_path = tmp_path / "drift_alerts.json"
+
+    expected_status = {
+        "overall_status": "NO_DRIFT",
+        "current_records": 120,
+        "feature_scores": {"total_price": 0.02},
+        "last_successful_analysis": None,
+    }
+
+    alert_path.write_text(
+        json.dumps(expected_status),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        api_main,
+        "DRIFT_ALERT_PATH",
+        alert_path,
+    )
+
+    response = client.get("/monitoring/drift")
+
+    assert response.status_code == 200
+    assert response.json() == expected_status
+
+
+def test_monitoring_drift_without_file(tmp_path, monkeypatch):
+    alert_path = tmp_path / "missing.json"
+
+    monkeypatch.setattr(
+        api_main,
+        "DRIFT_ALERT_PATH",
+        alert_path,
+    )
+
+    response = client.get("/monitoring/drift")
+
+    assert response.status_code == 200
+    assert response.json()["overall_status"] == "NOT_AVAILABLE"
+
+
+def test_monitoring_drift_report_returns_html(tmp_path, monkeypatch):
+    report_path = tmp_path / "data_drift_report.html"
+    report_path.write_text(
+        "<html><body>Drift Report</body></html>",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        api_main,
+        "DRIFT_REPORT_PATH",
+        report_path,
+    )
+
+    response = client.get("/monitoring/drift/report")
+
+    assert response.status_code == 200
+    assert "text/html" in response.headers["content-type"]
+    assert "Drift Report" in response.text
+
+
+def test_monitoring_drift_report_without_file(tmp_path, monkeypatch):
+    report_path = tmp_path / "missing.html"
+
+    monkeypatch.setattr(
+        api_main,
+        "DRIFT_REPORT_PATH",
+        report_path,
+    )
+
+    response = client.get("/monitoring/drift/report")
+
+    assert response.status_code == 404

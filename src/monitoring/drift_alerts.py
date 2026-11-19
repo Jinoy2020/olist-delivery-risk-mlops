@@ -3,10 +3,10 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
+from src.monitoring.storage import DRIFT_ALERT_PATH
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+ALERT_PATH = DRIFT_ALERT_PATH
 
-ALERT_PATH = PROJECT_ROOT / "reports" / "drift_alerts.json"
 
 DRIFT_THRESHOLD = 0.10
 

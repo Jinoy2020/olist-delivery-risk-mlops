@@ -7,6 +7,15 @@ import mlflow.sklearn
 import pandas as pd
 import time
 import httpx
+import json
+from pathlib import Path
+from fastapi.responses import HTMLResponse
+from fastapi.responses import FileResponse
+
+from src.monitoring.storage import (
+    DRIFT_ALERT_PATH,
+    DRIFT_REPORT_PATH,
+)
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
@@ -461,13 +470,51 @@ def get_monitoring_predictions(
             ],
         }
 
-    except Exception as exc:
+    except HTTPException:
+        raise
+
+    except (sqlite3.Error, ValueError, TypeError) as exc:
         raise HTTPException(
             status_code=500,
             detail="Unable to retrieve monitoring predictions.",
         ) from exc
+@app.get("/monitoring/drift")
+def get_drift_status():
+    if not DRIFT_ALERT_PATH.exists():
+        return {
+            "overall_status": "NOT_AVAILABLE",
+            "message": "No drift monitoring analysis is available yet.",
+            "last_successful_analysis": None,
+        }
 
+    try:
+        with open(DRIFT_ALERT_PATH, "r", encoding="utf-8") as file:
+            status = json.load(file)
 
+        return status
+
+    except (json.JSONDecodeError, OSError) as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to retrieve drift monitoring status.",
+        ) from exc
+@app.get("/monitoring/drift/report", response_class=HTMLResponse)
+def get_drift_report():
+    if not DRIFT_REPORT_PATH.exists():
+        raise HTTPException(
+            status_code=404,
+            detail="Drift report is not available yet.",
+        )
+
+    try:
+        html_content = DRIFT_REPORT_PATH.read_text(encoding="utf-8")
+        return HTMLResponse(content=html_content)
+
+    except OSError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="Unable to read drift report.",
+        ) from exc
 @app.post("/predict")
 def predict(order: OrderFeatures, request: Request):
     try:
