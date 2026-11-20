@@ -1,0 +1,4 @@
+
+pandas==2.3.3
+evidently==0.7.23
+requests==2.34.2

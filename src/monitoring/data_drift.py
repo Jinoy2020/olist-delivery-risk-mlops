@@ -1,11 +1,13 @@
 
+import os
 from pathlib import Path
-from src.monitoring.storage import DRIFT_REPORT_PATH
+
 import pandas as pd
 import requests
 from evidently import Report
 from evidently.presets import DataDriftPreset
 
+from src.monitoring.storage import DRIFT_REPORT_PATH
 from src.monitoring.drift_alerts import (
     evaluate_drift,
     save_monitoring_status,
@@ -14,12 +16,23 @@ from src.monitoring.drift_alerts import (
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
-REFERENCE_PATH = PROJECT_ROOT / "data" / "processed" / "train.csv"
+REFERENCE_PATH = Path(
+    os.getenv(
+        "DRIFT_REFERENCE_PATH",
+        str(PROJECT_ROOT / "data" / "processed" / "train.csv"),
+    )
+)
+
+API_BASE_URL = os.getenv(
+    "DRIFT_API_BASE_URL",
+    "http://localhost:8000",
+).rstrip("/")
 
 API_URL = (
-    "http://localhost:8000/monitoring/predictions"
+    f"{API_BASE_URL}/monitoring/predictions"
     "?limit=1000&traffic_source=production"
 )
+
 REPORT_PATH = DRIFT_REPORT_PATH
 
 FEATURES = [
@@ -37,6 +50,11 @@ MINIMUM_RECORDS = 100
 
 
 def load_reference_data():
+    if not REFERENCE_PATH.exists():
+        raise FileNotFoundError(
+            f"Reference dataset not found: {REFERENCE_PATH}"
+        )
+
     df = pd.read_csv(REFERENCE_PATH)
     return df[FEATURES].copy()
 
