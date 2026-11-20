@@ -1,0 +1,15 @@
+
+FROM python:3.13.9-slim
+
+WORKDIR /app
+
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+
+COPY requirements-scheduler.txt .
+
+RUN pip install --no-cache-dir -r requirements-scheduler.txt
+
+COPY src/ ./src/
+
+CMD ["python", "-m", "src.monitoring.scheduled_drift"]

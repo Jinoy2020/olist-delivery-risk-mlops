@@ -1,0 +1,45 @@
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: olist-delivery-risk-api:latest
+    container_name: olist-delivery-risk-api
+    ports:
+      - "8000:8000"
+    environment:
+      MODEL_PATH: /app/model
+      MONITORING_DB_PATH: /data/monitoring.db
+      MONITORING_DATA_DIR: /data
+    volumes:
+      - ./docker-data:/data
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=5)"
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    restart: unless-stopped
+
+  scheduler:
+    build:
+      context: .
+      dockerfile: Dockerfile.scheduler
+    image: olist-delivery-risk-scheduler:latest
+    container_name: olist-delivery-risk-scheduler
+    environment:
+      DRIFT_API_BASE_URL: http://api:8000
+      DRIFT_REFERENCE_PATH: /data/train.csv
+      MONITORING_DATA_DIR: /data
+    volumes:
+      - ./docker-data:/data
+      - ./data/processed/train.csv:/data/train.csv:ro
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped

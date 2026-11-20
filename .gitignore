@@ -41,3 +41,6 @@ reports/
 # Feast feature store
 .feast-venv/
 feature_store/data/
+
+# Local Docker monitoring data
+docker-data/
